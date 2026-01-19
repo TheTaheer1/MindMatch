@@ -1170,6 +1170,84 @@
         }
 
         /* ========================================
+           MEMORY SCORE DISPLAY
+        ======================================== */
+        .memory-score-container {
+            background: linear-gradient(135deg, var(--accent-mint), var(--accent-teal));
+            padding: var(--spacing-lg);
+            border-radius: var(--radius-lg);
+            margin: var(--spacing-lg) 0;
+            text-align: center;
+            box-shadow: var(--shadow-glow);
+            border: 2px solid var(--accent-mint);
+        }
+
+        .memory-score-label {
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.9);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: var(--spacing-xs);
+            font-family: var(--font-body);
+            font-weight: 600;
+        }
+
+        .memory-score-value {
+            font-size: 4rem;
+            font-weight: 800;
+            color: var(--text-white);
+            font-family: var(--font-heading);
+            line-height: 1;
+            margin: var(--spacing-sm) 0;
+            text-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .memory-score-rating {
+            font-size: 1.3rem;
+            color: var(--text-white);
+            font-weight: 600;
+            margin-top: var(--spacing-xs);
+            font-family: var(--font-body);
+        }
+
+        .memory-score-breakdown {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: var(--spacing-sm);
+            margin-top: var(--spacing-md);
+            padding-top: var(--spacing-md);
+            border-top: 2px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .score-metric {
+            text-align: center;
+        }
+
+        .score-metric-label {
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.8);
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+
+        .score-metric-value {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-white);
+        }
+
+        .best-score-badge {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            color: var(--text-white);
+            margin-top: var(--spacing-xs);
+            font-weight: 600;
+        }
+
+        /* ========================================
            RESPONSIVE DESIGN
         ======================================== */
         @media (max-width: 768px) {
@@ -1468,6 +1546,22 @@
 
             .stat-card-label {
                 font-size: 0.85rem;
+            }
+
+            .memory-score-container {
+                padding: 20px 15px;
+            }
+
+            .memory-score-value {
+                font-size: 3rem;
+            }
+
+            .memory-score-rating {
+                font-size: 1.1rem;
+            }
+
+            .memory-score-breakdown {
+                grid-template-columns: repeat(2, 1fr);
             }
         }
 
@@ -1874,6 +1968,7 @@
                 { id: 'hint_master', name: 'No Hints Needed', desc: 'Win without using hints', icon: '🎯', condition: (stats) => stats.noHintWins >= 1 },
             ],
             storageKey: 'memoryGameBestScores',
+            memoryScoreKey: 'memoryGameBestMemoryScores',
             themeKey: 'memoryGameTheme',
             soundKey: 'memoryGameSound',
             playerKey: 'memoryGamePlayer',
@@ -1899,7 +1994,8 @@
             hintsRemaining: 2,
             hintsUsed: 0,
             currentStreak: 0,
-            soundEnabled: true
+            soundEnabled: true,
+            mismatches: 0  // Track wrong pair attempts for Memory Score
         };
 
         /* ========================================
@@ -2359,6 +2455,51 @@
                 } catch (error) {
                     console.error('Error saving tutorial flag:', error);
                 }
+            },
+
+            /**
+             * Get best memory scores for all difficulties
+             * @returns {Object} - Object with difficulty keys and score values
+             */
+            getBestMemoryScores() {
+                try {
+                    const data = localStorage.getItem(GAME_CONFIG.memoryScoreKey);
+                    return data ? JSON.parse(data) : {};
+                } catch (error) {
+                    console.error('Error reading memory scores:', error);
+                    return {};
+                }
+            },
+
+            /**
+             * Save best memory score for a difficulty
+             * @param {string} difficulty - Difficulty level
+             * @param {number} score - Memory score (0-100)
+             * @returns {boolean} - True if new best score
+             */
+            saveBestMemoryScore(difficulty, score) {
+                try {
+                    const scores = this.getBestMemoryScores();
+                    if (!scores[difficulty] || score > scores[difficulty]) {
+                        scores[difficulty] = score;
+                        localStorage.setItem(GAME_CONFIG.memoryScoreKey, JSON.stringify(scores));
+                        return true;
+                    }
+                    return false;
+                } catch (error) {
+                    console.error('Error saving memory score:', error);
+                    return false;
+                }
+            },
+
+            /**
+             * Get best memory score for a specific difficulty
+             * @param {string} difficulty - Difficulty level
+             * @returns {number|null} - Best score or null
+             */
+            getBestMemoryScore(difficulty) {
+                const scores = this.getBestMemoryScores();
+                return scores[difficulty] || null;
             }
         };
 
@@ -2392,6 +2533,105 @@
                     isFlipped: false,
                     isMatched: false
                 }));
+            },
+
+            /**
+             * Calculate Memory Score (0-100) based on player performance
+             * @param {Object} stats - Game statistics
+             * @param {number} stats.time - Total time taken (seconds)
+             * @param {number} stats.moves - Total moves made
+             * @param {number} stats.pairs - Total pairs in game
+             * @param {number} stats.mismatches - Total wrong pairs
+             * @param {string} stats.difficulty - Difficulty level (easy/medium/hard)
+             * @returns {Object} - Score data with value, rating, and breakdown
+             */
+            calculateMemoryScore(stats) {
+                const { time, moves, pairs, mismatches, difficulty } = stats;
+                
+                // Define difficulty-based thresholds and multipliers
+                const difficultyConfig = {
+                    easy: {
+                        expectedTime: 30,      // Expected completion time (seconds)
+                        timeWeight: 0.3,       // Weight for time performance
+                        movesWeight: 0.4,      // Weight for moves efficiency
+                        mismatchWeight: 0.3,   // Weight for accuracy
+                        multiplier: 1.0        // Score multiplier
+                    },
+                    medium: {
+                        expectedTime: 60,
+                        timeWeight: 0.35,
+                        movesWeight: 0.35,
+                        mismatchWeight: 0.3,
+                        multiplier: 1.2
+                    },
+                    hard: {
+                        expectedTime: 120,
+                        timeWeight: 0.4,
+                        movesWeight: 0.3,
+                        mismatchWeight: 0.3,
+                        multiplier: 1.5
+                    }
+                };
+
+                const config = difficultyConfig[difficulty] || difficultyConfig.medium;
+                const minMoves = pairs; // Perfect game = pairs matched in minimum moves
+
+                // Calculate individual component scores (0-100 each)
+                
+                // 1. Time Score: Better if time < expected time
+                const timeRatio = config.expectedTime / Math.max(time, 1);
+                const timeScore = Math.min(100, timeRatio * 100);
+
+                // 2. Moves Score: Better with fewer moves
+                const extraMoves = Math.max(0, moves - minMoves);
+                const movesPenalty = (extraMoves / minMoves) * 100;
+                const movesScore = Math.max(0, 100 - movesPenalty);
+
+                // 3. Accuracy Score: Better with fewer mismatches
+                const mismatchPenalty = (mismatches / Math.max(pairs, 1)) * 150; // Heavier penalty
+                const accuracyScore = Math.max(0, 100 - mismatchPenalty);
+
+                // Calculate weighted average
+                const baseScore = (
+                    timeScore * config.timeWeight +
+                    movesScore * config.movesWeight +
+                    accuracyScore * config.mismatchWeight
+                );
+
+                // Apply difficulty multiplier
+                const finalScore = Math.min(100, baseScore * config.multiplier);
+
+                // Round to nearest integer
+                const score = Math.round(finalScore);
+
+                // Determine rating based on score
+                let rating, emoji;
+                if (score >= 90) {
+                    rating = 'Excellent Memory';
+                    emoji = '🧠';
+                } else if (score >= 70) {
+                    rating = 'Good Memory';
+                    emoji = '👍';
+                } else if (score >= 50) {
+                    rating = 'Average Memory';
+                    emoji = '🙂';
+                } else {
+                    rating = 'Needs Improvement';
+                    emoji = '💪';
+                }
+
+                // Return comprehensive score data
+                return {
+                    score: score,
+                    rating: rating,
+                    emoji: emoji,
+                    breakdown: {
+                        timeScore: Math.round(timeScore),
+                        movesScore: Math.round(movesScore),
+                        accuracyScore: Math.round(accuracyScore),
+                        efficiency: Math.round((movesScore + accuracyScore) / 2)
+                    }
+                };
             }
         };
 
@@ -2889,7 +3129,7 @@
                 }, 600);
             },
 
-            renderResult(isWin, isNewRecord = false, newAchievements = []) {
+            renderResult(isWin, isNewRecord = false, newAchievements = [], memoryScore = null, isNewBestScore = false) {
                 DOM.resultScreen.className = 'screen active result-screen ' + (isWin ? 'win' : 'lose');
                 
                 DOM.resultTitle.textContent = isWin ? '🎉 Congratulations!' : '😔 Game Over';
@@ -2908,6 +3148,40 @@
                         <span>${stat.value}</span>
                     </div>
                 `).join('');
+                
+                // Add Memory Score display if available
+                if (memoryScore && isWin) {
+                    const bestScore = Storage.getBestMemoryScore(gameState.difficulty);
+                    html += `
+                        <div class="memory-score-container">
+                            <h3 style="margin-top: 0;">Memory Score</h3>
+                            <div class="memory-score-value">${Math.round(memoryScore.score)}</div>
+                            <div class="memory-score-rating">${memoryScore.rating} ${memoryScore.emoji}</div>
+                            
+                            ${isNewBestScore ? '<div class="best-score-badge">🏆 NEW BEST SCORE! 🏆</div>' : ''}
+                            ${bestScore && !isNewBestScore ? `<div class="best-score-badge">Best: ${Math.round(bestScore)}</div>` : ''}
+                            
+                            <div class="memory-score-breakdown">
+                                <div class="score-metric">
+                                    <span class="metric-label">Time Efficiency</span>
+                                    <span class="metric-value">${Math.round(memoryScore.breakdown.timeScore)}%</span>
+                                </div>
+                                <div class="score-metric">
+                                    <span class="metric-label">Move Efficiency</span>
+                                    <span class="metric-value">${Math.round(memoryScore.breakdown.movesScore)}%</span>
+                                </div>
+                                <div class="score-metric">
+                                    <span class="metric-label">Accuracy</span>
+                                    <span class="metric-value">${Math.round(memoryScore.breakdown.accuracyScore)}%</span>
+                                </div>
+                                <div class="score-metric">
+                                    <span class="metric-label">Overall</span>
+                                    <span class="metric-value">${Math.round(memoryScore.breakdown.efficiency)}%</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
                 
                 if (isNewRecord && isWin) {
                     html += `
@@ -3061,6 +3335,7 @@
                 gameState.lockBoard = false;
                 gameState.firstFlip = true;
                 gameState.hintsUsed = 0;
+                gameState.mismatches = 0; // Reset mismatches for new game
                 
                 const config = GAME_CONFIG.difficulties[gameState.difficulty];
                 gameState.hintsRemaining = config.hints;
@@ -3169,6 +3444,7 @@
                 UI.animateCard(firstId, 'wrong');
                 UI.animateCard(secondId, 'wrong');
                 Sound.play('mismatch');
+                gameState.mismatches++; // Track mismatches for Memory Score
                 
                 setTimeout(() => {
                     gameState.cards[firstId].isFlipped = false;
@@ -3232,6 +3508,17 @@
                 
                 const isNewRecord = Storage.saveBestScore(gameState.difficulty, score);
                 
+                // Calculate Memory Score
+                const memoryScore = Utils.calculateMemoryScore({
+                    time: gameState.timer,
+                    moves: gameState.moves,
+                    pairs: GAME_CONFIG.difficulties[gameState.difficulty].pairs,
+                    mismatches: gameState.mismatches,
+                    difficulty: gameState.difficulty
+                });
+                
+                const isNewBestScore = Storage.saveBestMemoryScore(gameState.difficulty, memoryScore.score);
+                
                 // Update stats
                 Stats.updateGameStats(true, gameState.moves, gameState.timer, gameState.difficulty);
                 
@@ -3240,7 +3527,7 @@
                 
                 setTimeout(() => {
                     UI.showScreen('result');
-                    UI.renderResult(true, isNewRecord, newAchievements);
+                    UI.renderResult(true, isNewRecord, newAchievements, memoryScore, isNewBestScore);
                     UI.renderBestScores();
                 }, 800);
             },
